@@ -1,0 +1,8 @@
+# KaliAgent runtime dependencies
+google-genai>=1.0.0        # Gemini API client (function calling)
+textual>=0.80.0            # live TUI
+rich>=13.7.0               # console rendering + Textual dependency
+pexpect>=4.9.0             # interactive tools (msfconsole, ssh, ftp, ...)
+
+# Development / tests
+# pytest>=8.0.0
