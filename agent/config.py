@@ -42,6 +42,8 @@ class Config:
     model: str = DEFAULT_MODEL
     scope: list[str] = field(default_factory=list)
     max_steps: int = 40
+    #: Uncensored / unsafe mode: no destructive-command or scope confirmations.
+    unsafe: bool = False
     created_at: str = ""
 
     # ------------------------------------------------------------------ io
@@ -135,6 +137,7 @@ def ensure_config(
     *,
     model: str | None = None,
     scope: list[str] | None = None,
+    unsafe: bool | None = None,
     interactive: bool = True,
 ) -> Config:
     """Load the config, creating it (and asking for a key) on first run."""
@@ -165,6 +168,9 @@ def ensure_config(
     if scope is not None and scope != config.scope:
         config.scope = scope
         changed = True
+    if unsafe is not None and unsafe != config.unsafe:
+        config.unsafe = unsafe
+        changed = True
 
     if changed or not CONFIG_FILE.exists():
         save_config(config)
@@ -185,7 +191,8 @@ def config_summary(config: Config) -> str:
     """Single-line human readable summary used by the status bar."""
 
     scope = ", ".join(config.scope) if config.scope else "unrestricted"
+    mode = "UNSAFE" if config.unsafe else "safe"
     return (
-        f"model={config.model} | key={mask_key(config.api_key)} | "
+        f"model={config.model} | key={mask_key(config.api_key)} | mode={mode} | "
         f"scope={scope} | config={CONFIG_FILE}"
     )

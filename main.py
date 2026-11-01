@@ -75,6 +75,22 @@ def build_parser() -> argparse.ArgumentParser:
         "(watch with: tmux attach -t kali-agent).",
     )
     parser.add_argument(
+        "--unsafe",
+        "--no-safety",
+        "--yolo",
+        dest="unsafe",
+        action="store_true",
+        default=None,
+        help="UNCENSORED mode: no confirmation for destructive commands and no "
+        "scope blocking (meant for disposable Kali Live systems). Persisted.",
+    )
+    parser.add_argument(
+        "--safe",
+        dest="unsafe",
+        action="store_false",
+        help="Turn the confirmation guards back on (overrides a stored unsafe=true).",
+    )
+    parser.add_argument(
         "--plain",
         action="store_true",
         help="Skip the Textual TUI and use the simple console interface.",
@@ -156,7 +172,7 @@ def run_plain(args, config, registry, bridge) -> int:
         default_timeout=args.timeout,
         tmux_bridge=bridge,
     )
-    safety = SafetyGuard(config.scope, ask=hooks.ask_user)
+    safety = SafetyGuard(config.scope, ask=hooks.ask_user, unsafe=config.unsafe)
     dispatcher = ToolDispatcher(
         ToolContext(
             executor=executor,
@@ -177,6 +193,7 @@ def run_plain(args, config, registry, bridge) -> int:
         logger=logger,
         memory=memory,
         max_steps=args.max_steps,
+        unsafe=config.unsafe,
     )
 
     installed, total = registry.counts()
@@ -186,6 +203,7 @@ def run_plain(args, config, registry, bridge) -> int:
         tools_installed=installed,
         tools_available=total,
         mode="tmux" if bridge else "plain",
+        unsafe=config.unsafe,
     )
 
     if bridge is not None:
@@ -230,8 +248,19 @@ def run_plain(args, config, registry, bridge) -> int:
                 break
             if task.lower() in {"help", "?"}:
                 print(
-                    "  exit · help · scope <targets>   "
+                    "  exit · help · scope <targets> · unsafe on|off   "
                     "(or just describe the task in Bangla or English)"
+                )
+                continue
+            if task.lower() in {"unsafe on", "unsafe off", "unsafe"}:
+                enabled = task.lower() != "unsafe off"
+                safety.set_unsafe(enabled)
+                agent.set_unsafe(enabled)
+                _persist_unsafe(enabled)
+                hooks.console.print(
+                    f"[bold red]unsafe mode {'ON' if enabled else 'OFF'}[/]"
+                    if enabled
+                    else "[green]unsafe mode OFF - confirmations restored[/]"
                 )
                 continue
             if task.lower().startswith("scope "):
@@ -245,6 +274,20 @@ def run_plain(args, config, registry, bridge) -> int:
         return exit_code
     finally:
         _finish_session(memory, logger, hooks.console)
+
+
+def _persist_unsafe(enabled: bool) -> None:
+    """Remember the unsafe-mode choice for the next run (best effort)."""
+
+    try:
+        from agent.config import load_config, save_config
+
+        config = load_config()
+        if config is not None:
+            config.unsafe = enabled
+            save_config(config)
+    except Exception:  # never break the session over a config write
+        pass
 
 
 def _persist_scope(targets: list[str]) -> None:
@@ -276,7 +319,9 @@ def run_tui(args, config, registry) -> int:  # pragma: no cover - needs a TTY
     memory = Memory(scope=config.scope)
     logger = SessionLogger(LOGS_DIR)
     executor = CommandExecutor(cwd=ROOT, default_timeout=args.timeout)
-    safety = SafetyGuard(config.scope)  # the ask callback is wired to the app below
+    safety = SafetyGuard(
+        config.scope, unsafe=config.unsafe
+    )  # the ask callback is wired to the app below
 
     installed, total = registry.counts()
     logger.session_start(
@@ -285,6 +330,7 @@ def run_tui(args, config, registry) -> int:  # pragma: no cover - needs a TTY
         tools_installed=installed,
         tools_available=total,
         mode="tui",
+        unsafe=config.unsafe,
     )
 
     session = AppSession(
@@ -298,6 +344,7 @@ def run_tui(args, config, registry) -> int:  # pragma: no cover - needs a TTY
         workspace=WORKSPACE_DIR,
         root=ROOT,
         max_steps=args.max_steps,
+        unsafe=config.unsafe,
     )
     task = " ".join(args.task).strip() or None
     app = KaliAgentApp(session, initial_task=task)
@@ -349,6 +396,7 @@ def main(argv: list[str] | None = None) -> int:
         config = ensure_config(
             model=args.model,
             scope=args.scope,
+            unsafe=args.unsafe,
             interactive=not args.non_interactive,
         )
     except (RuntimeError, KeyboardInterrupt) as exc:
@@ -357,6 +405,13 @@ def main(argv: list[str] | None = None) -> int:
 
     print(BANNER)
     print(f"  {config_summary(config)}")
+    if config.unsafe:
+        label = "\033[1;31mUNSAFE MODE\033[0m" if sys.stdout.isatty() else "UNSAFE MODE"
+        print(
+            f"  {label}: destructive commands and out-of-scope targets run WITHOUT "
+            "confirmation.\n"
+            "  Every command is still logged. Use --safe to restore the guards."
+        )
 
     # --tmux: every command runs inside a visible tmux session
     bridge = None

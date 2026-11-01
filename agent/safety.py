@@ -453,6 +453,14 @@ class SafetyDecision:
     targets: list[str] = field(default_factory=list)
     out_of_scope: list[str] = field(default_factory=list)
     denied_reason: str = ""
+    #: True when unsafe mode let this command through without asking.
+    unsafe: bool = False
+
+    @property
+    def risky(self) -> bool:
+        """True when the command hit a destructive rule or left the scope."""
+
+        return bool(self.reasons or self.out_of_scope)
 
     def describe(self) -> str:
         bits = list(self.reasons)
@@ -471,15 +479,21 @@ class SafetyGuard:
     ask:
         Callback used by :meth:`gate` to obtain a human decision. ``None``
         means "no human available", in which case risky commands are refused.
+    unsafe:
+        **Uncensored mode.** When True the guard still analyses every command
+        (so the log shows what *would* have needed approval) but never asks and
+        never blocks. Meant for disposable systems such as Kali Live.
     """
 
     def __init__(
         self,
         scope: Sequence[str] | None = None,
         ask: AskFn | None = None,
+        unsafe: bool = False,
     ) -> None:
         self._scope: list[str] = [s.strip() for s in (scope or []) if s.strip()]
         self._ask = ask
+        self._unsafe = bool(unsafe)
 
     # ------------------------------------------------------------- scope
     @property
@@ -492,6 +506,16 @@ class SafetyGuard:
     def set_ask(self, ask: AskFn | None) -> None:
         self._ask = ask
 
+    # -------------------------------------------------------- unsafe mode
+    @property
+    def unsafe(self) -> bool:
+        """True when confirmations are disabled (uncensored mode)."""
+
+        return self._unsafe
+
+    def set_unsafe(self, unsafe: bool) -> None:
+        self._unsafe = bool(unsafe)
+
     # ------------------------------------------------------------- checks
     def check(self, command: str) -> SafetyDecision:
         """Evaluate ``command`` without prompting anybody."""
@@ -500,6 +524,14 @@ class SafetyGuard:
         decision.reasons = destructive_reasons(command)
         decision.targets = extract_targets(command)
         decision.out_of_scope = out_of_scope(decision.targets, self._scope)
+        decision.unsafe = self._unsafe
+
+        if self._unsafe:
+            # Uncensored mode: keep the analysis for the audit log, never block.
+            decision.needs_confirmation = False
+            decision.allowed = True
+            return decision
+
         decision.needs_confirmation = bool(decision.reasons or decision.out_of_scope)
         decision.allowed = not decision.needs_confirmation
         return decision

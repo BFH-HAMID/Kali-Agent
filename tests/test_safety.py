@@ -218,3 +218,66 @@ def test_set_scope_updates_matching() -> None:
     assert guard.scope == ["192.168.1.0/24"]
     assert guard.check("nmap 192.168.1.10").allowed is True
     assert guard.check("nmap 1.1.1.1").needs_confirmation is True
+
+
+# --------------------------------------------------------------------------
+# unsafe / uncensored mode
+# --------------------------------------------------------------------------
+
+
+def test_unsafe_mode_runs_destructive_commands_without_asking() -> None:
+    asked: list[str] = []
+
+    def ask(question: str) -> bool:
+        asked.append(question)
+        return False
+
+    guard = SafetyGuard(scope=["10.0.0.0/24"], ask=ask, unsafe=True)
+    decision = guard.gate("rm -rf / && mkfs.ext4 /dev/sda1")
+
+    assert decision.allowed is True
+    assert decision.needs_confirmation is False
+    assert decision.unsafe is True
+    assert decision.risky is True, "the command must still be analysed for the log"
+    assert decision.reasons
+    assert asked == [], "unsafe mode must never prompt"
+
+
+def test_unsafe_mode_ignores_scope() -> None:
+    guard = SafetyGuard(scope=["10.0.0.0/24"], unsafe=True)
+    decision = guard.gate("nmap -sV -p- 8.8.8.8")
+    assert decision.allowed is True
+    assert decision.out_of_scope == ["8.8.8.8"]  # recorded, not enforced
+
+
+def test_unsafe_can_be_toggled_at_runtime() -> None:
+    guard = SafetyGuard(scope=[])
+    assert guard.unsafe is False
+    assert guard.gate("rm -rf /").allowed is False
+
+    guard.set_unsafe(True)
+    assert guard.unsafe is True
+    assert guard.gate("rm -rf /").allowed is True
+
+    guard.set_unsafe(False)
+    assert guard.unsafe is False
+    assert guard.gate("rm -rf /").allowed is False
+
+
+def test_safe_mode_still_refuses_without_a_human() -> None:
+    guard = SafetyGuard(scope=[], unsafe=False)
+    decision = guard.gate("shutdown -h now")
+    assert decision.allowed is False
+    assert decision.unsafe is False
+
+
+def test_unsafe_system_prompt_addendum() -> None:
+    from agent.system_prompt import build_system_prompt
+
+    safe = build_system_prompt(False)
+    unsafe = build_system_prompt(True)
+
+    assert "UNSAFE MODE" not in safe
+    assert "UNSAFE MODE" in unsafe
+    assert safe.strip() in unsafe, "the base prompt must be preserved verbatim"
+    assert "ask_user" in unsafe and "logs" in unsafe.lower()

@@ -24,7 +24,7 @@ from google.genai import types
 
 from .logger import SessionLogger
 from .memory import Memory
-from .system_prompt import SYSTEM_PROMPT
+from .system_prompt import build_system_prompt
 from .tools import AgentFinished, ToolDispatcher
 
 #: HTTP-ish status codes worth retrying.
@@ -169,6 +169,7 @@ class KaliAgent:
         memory: Memory | None = None,
         max_steps: int = 40,
         temperature: float = 0.2,
+        unsafe: bool = False,
     ) -> None:
         self.model = model
         self.dispatcher = dispatcher
@@ -177,6 +178,7 @@ class KaliAgent:
         self.memory = memory or Memory()
         self.max_steps = max(1, int(max_steps))
         self.temperature = temperature
+        self.unsafe = bool(unsafe)
 
         self._client = genai.Client(api_key=api_key)
         self._chat: Any = None
@@ -185,7 +187,7 @@ class KaliAgent:
     # ------------------------------------------------------------------ chat
     def _config(self) -> types.GenerateContentConfig:
         return types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
+            system_instruction=build_system_prompt(self.unsafe),
             tools=[types.Tool(function_declarations=self.dispatcher.declarations)],
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             temperature=self.temperature,
@@ -200,6 +202,13 @@ class KaliAgent:
         """Drop the conversation history (scope/notes are kept)."""
 
         self._chat = None
+
+    def set_unsafe(self, unsafe: bool) -> None:
+        """Switch uncensored mode on/off and rebuild the prompt on next task."""
+
+        if bool(unsafe) != self.unsafe:
+            self.unsafe = bool(unsafe)
+            self._chat = None  # the system instruction is part of the chat config
 
     # ---------------------------------------------------------------- calls
     def _send(self, message: Any) -> Any:

@@ -147,6 +147,8 @@ class AppSession:
     root: Path
     allow_install: bool = True
     max_steps: int = 40
+    #: Uncensored mode: destructive commands and out-of-scope targets run freely.
+    unsafe: bool = False
 
 
 class KaliAgentApp(App):
@@ -183,6 +185,7 @@ class KaliAgentApp(App):
         ("ctrl+l", "clear_terminal", "Clear terminal"),
         ("ctrl+r", "rescan_tools", "Rescan tools"),
         ("ctrl+n", "new_chat", "New chat"),
+        ("ctrl+t", "toggle_unsafe", "Unsafe mode"),
     ]
 
     def __init__(self, session: AppSession, initial_task: str | None = None) -> None:
@@ -213,7 +216,8 @@ class KaliAgentApp(App):
                     id="term", wrap=False, markup=False, auto_scroll=True, max_lines=5000
                 )
         yield Static(
-            "Command history  ·  Esc stop · Ctrl+R rescan · Ctrl+N new chat",
+            "Command history  ·  Esc stop · Ctrl+R rescan · Ctrl+N new chat · "
+            "Ctrl+T unsafe",
             id="history-title",
         )
         yield DataTable(id="history")
@@ -232,9 +236,15 @@ class KaliAgentApp(App):
         self.query_one("#prompt", Input).focus()
         self.set_interval(1.0, self._refresh_status)
 
+        if self.session.unsafe:
+            self._write_chat_note(
+                "UNSAFE MODE is ON: destructive commands and out-of-scope targets "
+                "run without confirmation (everything is still logged).",
+                style="bold red",
+            )
         self._write_chat_note(
-            "KaliAgent ready - every command runs on this machine, live, and the "
-            "safety layer enforces the scope."
+            "KaliAgent ready - every command runs on this machine, live. "
+            "Ctrl+T toggles unsafe mode."
         )
         if self.initial_task:
             self._start_task(self.initial_task)
@@ -275,6 +285,7 @@ class KaliAgentApp(App):
                 logger=self.session.logger,
                 memory=self.session.memory,
                 max_steps=self.session.max_steps,
+                unsafe=self.session.unsafe,
             )
         return self._agent
 
@@ -391,9 +402,10 @@ class KaliAgentApp(App):
     def _status_text(self) -> str:
         installed, total = self.session.registry.counts()
         scope = ", ".join(self.session.memory.scope) or "unrestricted"
+        mode = "UNSAFE" if self.session.unsafe else "safe"
         return (
             f"Tools: {installed} installed / {total} available | Scope: {scope} | "
-            f"{self.session.model} | {self._status_note}"
+            f"{mode} | {self.session.model} | {self._status_note}"
         )
 
     def _refresh_status(self) -> None:
@@ -479,6 +491,41 @@ class KaliAgentApp(App):
             except Exception:
                 pass
             self._set_note("stopping...")
+
+    def action_toggle_unsafe(self) -> None:
+        """Toggle uncensored mode (destructive commands + scope checks)."""
+
+        self.session.unsafe = not self.session.unsafe
+        self.session.safety.set_unsafe(self.session.unsafe)
+        if self._agent is not None:
+            self._agent.set_unsafe(self.session.unsafe)
+        self.session.logger.log("unsafe_mode", enabled=self.session.unsafe)
+        self._persist_unsafe(self.session.unsafe)
+        if self.session.unsafe:
+            self._write_chat_note(
+                "UNSAFE MODE ON - no confirmations for destructive commands or "
+                "out-of-scope targets.",
+                style="bold red",
+            )
+        else:
+            self._write_chat_note(
+                "unsafe mode OFF - confirmations restored.", style="green"
+            )
+        self._refresh_status()
+
+    @staticmethod
+    def _persist_unsafe(enabled: bool) -> None:
+        """Remember the toggle for the next run (best effort)."""
+
+        try:
+            from agent.config import load_config, save_config
+
+            config = load_config()
+            if config is not None:
+                config.unsafe = enabled
+                save_config(config)
+        except Exception:  # never break the UI over a config write
+            pass
 
     def action_clear_terminal(self) -> None:
         try:

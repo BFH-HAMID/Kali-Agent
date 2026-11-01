@@ -58,4 +58,33 @@ Reply in the language the user writes in (Bangla or English). Be concise.
 Keep reasoning brief and practical.
 """
 
-__all__ = ["SYSTEM_PROMPT"]
+#: Appended to :data:`SYSTEM_PROMPT` in uncensored / unsafe mode.
+UNSAFE_ADDENDUM = """
+UNSAFE MODE (enabled by the operator)
+The operator runs KaliAgent on a disposable Kali Live system where nothing can
+be permanently broken, and has disabled the safety confirmations. In this mode:
+A. Destructive and irreversible commands (rm -rf, mkfs, dd, wipefs, killing
+   services, rewriting /etc, reboots) are allowed. Do NOT call ask_user just to
+   get permission for them - just do the work and explain what you did.
+B. The scope is informational only. You may operate outside it when the task
+   requires it; mention the target you used in your summary.
+C. sudo is passwordless. Use it freely whenever a command needs root
+   (including `sudo su -` style command execution via run_command).
+D. Everything is still logged. Never delete, truncate or tamper with
+   logs/ or the session JSONL - the operator relies on them.
+E. Still call ask_user for decisions only the human can make: which target to
+   attack, credentials you do not have, or a genuine strategic choice.
+F. Still never exfiltrate the user's files, keys, tokens or credentials to
+   external services.
+"""
+
+
+def build_system_prompt(unsafe: bool = False) -> str:
+    """Return the system instruction, with the unsafe addendum when enabled."""
+
+    if unsafe:
+        return SYSTEM_PROMPT.rstrip() + "\n\n" + UNSAFE_ADDENDUM.strip() + "\n"
+    return SYSTEM_PROMPT
+
+
+__all__ = ["SYSTEM_PROMPT", "UNSAFE_ADDENDUM", "build_system_prompt"]

@@ -39,6 +39,7 @@ sudo chmod 440 /etc/sudoers.d/kali-agent
 python main.py                     # প্রথমবার Gemini API key চাইবে (hidden input)
 python main.py --scope 10.10.10.0/24
 python main.py --tmux               # অন্য টার্মিনালে: tmux attach -t kali-agent
+python main.py --unsafe             # Kali Live: কোনো confirmation ছাড়াই (persisted)
 ```
 
 API key `~/.config/kali-agent/config.json` এ `chmod 600` দিয়ে সেভ হয় — কোনো `.env` নেই।
@@ -56,6 +57,7 @@ API key `~/.config/kali-agent/config.json` এ `chmod 600` দিয়ে স�
 | **Live view** | Textual TUI, or `--tmux` mode (`tmux attach -t kali-agent`) |
 | **sudo** | Passwordless — the agent can use `sudo` non-interactively |
 | **Safety** | Destructive commands need confirmation; out-of-scope targets are refused unless approved |
+| **Uncensored** | `--unsafe` (a.k.a. `--no-safety` / `--yolo`): no confirmation, no scope blocking — for Kali **Live** / disposable systems. Still fully logged |
 | **Logs** | Every command, output, exit code and duration in `logs/<session>.jsonl` + Markdown report |
 | **Memory** | Scope, notes, findings, command timeline; exported as Markdown on `finish` |
 
@@ -99,6 +101,8 @@ python main.py --model gemini-2.5-flash          # switch model (remembered)
 python main.py --reset-key                       # forget the stored API key
 python main.py --max-steps 80 --timeout 600      # longer tasks / slower tools
 python main.py --non-interactive "quick task"    # never prompt (needs a stored key)
+python main.py --unsafe                          # uncensored mode (Kali Live)
+python main.py --safe                            # restore the guards again
 ```
 
 ### TUI
@@ -112,7 +116,7 @@ python main.py --non-interactive "quick task"    # never prompt (needs a stored 
 | Input box | Your task — or `y`/`n` when the agent asks for approval |
 
 Keys: `Esc` stop the running task · `Ctrl+R` rescan tools · `Ctrl+N` new chat ·
-`Ctrl+L` clear terminal · `Ctrl+Q` quit.
+`Ctrl+T` toggle unsafe mode · `Ctrl+L` clear terminal · `Ctrl+Q` quit.
 
 ### tmux live mode
 
@@ -157,6 +161,9 @@ The full system prompt lives in `agent/system_prompt.py` and is passed verbatim 
 
 ## 6. Safety
 
+> **Uncensored mode** — on a disposable Kali Live system you can skip all of this with
+> `--unsafe`. See [section 6b](#6b-uncensored--unsafe-mode-kali-live).
+
 Two independent gates run before every command (`agent/safety.py`):
 
 **a) Destructive-command blocklist** — regex rules plus a structural `rm` analysis:
@@ -192,6 +199,40 @@ silently executed. Answers are logged (`user_answer`) so the audit trail is comp
 > The blocklist is defence-in-depth, **not** a sandbox. You remain responsible for the
 > commands that run on your machine.
 
+### 6b. Uncensored / unsafe mode (Kali Live)
+
+If the machine is disposable (Kali Live USB, throwaway VM, lab range) you do not need the
+confirmations. Enable unsafe mode once — it is stored in the config and stays on:
+
+```bash
+python main.py --unsafe          # aliases: --no-safety, --yolo
+python main.py --safe            # turn the guards back on
+```
+
+In unsafe mode:
+
+* destructive / irreversible commands (`rm -rf`, `mkfs`, `dd`, `wipefs`, `shutdown`, …)
+  run immediately — no `ask_user` round-trip;
+* the scope becomes **informational**: out-of-scope targets are used without asking;
+* `sudo` is passwordless, so root work (including `sudo su -` style execution) just works;
+* the system prompt is extended (`UNSAFE_ADDENDUM` in `agent/system_prompt.py`) so the model
+  stops wasting steps on permission requests, but it still must not exfiltrate your
+  files/keys to external services;
+* **nothing is hidden**: every command that *would* have needed approval is still written to
+  the JSONL log as `"event":"safety_bypassed"` with the matched rules and out-of-scope
+  targets, so you can audit the session afterwards.
+
+Toggle it live: `Ctrl+T` in the TUI, or type `unsafe on` / `unsafe off` in `--plain` /
+`--tmux` mode. The status line shows `UNSAFE` while it is active.
+
+```json
+{"event":"safety_bypassed","command":"rm -rf /var/lib/foo","reasons":["recursive delete inside /var/lib can break the system"],"out_of_scope":[],"unsafe":true}
+```
+
+> There is **no** undo on a Live system either — the data you destroy in the live session is
+> gone, and the guards are what stop a confused model from doing it by accident. Use
+> `--unsafe` deliberately, not by default.
+
 ---
 
 ## 7. Logs, memory and reports
@@ -213,6 +254,7 @@ Handy queries:
 jq -r 'select(.event=="command") | "\(.exit_code)\t\(.duration_s)s\t\(.command)"' logs/*.jsonl
 jq -r 'select(.event=="note" and .kind=="finding") | .text' logs/*.jsonl
 jq -r 'select(.event=="safety_blocked") | .' logs/*.jsonl
+jq -r 'select(.event=="safety_bypassed") | "\(.command)\t\(.reasons)"' logs/*.jsonl
 ```
 
 * `agent/memory.py` keeps scope, notes, findings and the command timeline and exports a
@@ -300,7 +342,7 @@ python -m pytest tests/ -q
 * `tests/test_executor.py` — streaming, exit codes, stderr merge, timeout + process-group
   kill, cancellation, truncation, `cwd`, `pexpect` interaction.
 
-Current state: **94 tests, all passing** (`python -m pytest tests/ -q`).
+Current state: **99 tests, all passing** (`python -m pytest tests/ -q`).
 
 ---
 
@@ -315,6 +357,8 @@ Current state: **94 tests, all passing** (`python -m pytest tests/ -q`).
 | `Textual is unavailable` | `pip install textual` (or keep using `--plain`) |
 | tmux mode does nothing | `sudo apt install tmux`, then `tmux attach -t kali-agent` |
 | A command hangs | It is killed at `--timeout` (default 180 s) |
+| Too many approval prompts | Use `--unsafe` on a disposable system (section 6b) |
+| Unsafe mode will not turn off | `python main.py --safe` (the flag is persisted in the config) |
 
 ---
 

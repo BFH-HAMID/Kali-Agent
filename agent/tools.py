@@ -415,12 +415,16 @@ class ToolDispatcher:
 
         decision = self.ctx.safety.gate(cmd)
         if decision.allowed:
-            if decision.reasons or decision.out_of_scope:
+            if decision.risky:
+                # In unsafe mode nothing was asked, but the log still records
+                # exactly which rule/scope check would have fired.
+                event = "safety_bypassed" if decision.unsafe else "safety_approved"
                 self.ctx.logger.log(
-                    "safety_approved",
+                    event,
                     command=cmd,
                     reasons=decision.reasons,
                     out_of_scope=decision.out_of_scope,
+                    unsafe=decision.unsafe,
                 )
             return None
 
